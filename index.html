@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Generation 1 Pokédex</title>
+    <title>Generation 1 Pokédex - Fast Loading</title>
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -22,7 +22,14 @@
             </select>
         </div>
 
-        <div id="loadingDiv" class="loading">Loading Pokédex...</div>
+        <div id="loadingDiv" class="loading">
+            <div class="loading-spinner"></div>
+            <p>Loading Pokédex... <span id="loadingProgress">0/151</span></p>
+            <div class="progress-bar">
+                <div id="progressFill" class="progress-fill"></div>
+            </div>
+        </div>
+        
         <div id="pokemonGrid" class="pokemon-grid" style="display: none;"></div>
     </div>
 

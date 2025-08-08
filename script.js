@@ -1,73 +1,138 @@
-class Pokedex {
+class FastPokedex {
     constructor() {
         this.pokemonList = [];
         this.filteredPokemon = [];
         this.types = [];
+        this.loadedCount = 0;
         this.init();
     }
 
     async init() {
-        await this.fetchAllPokemon();
+        await this.fetchAllPokemonConcurrently();
         this.setupEventListeners();
         this.populateTypeFilter();
         this.displayPokemon();
     }
 
-    async fetchAllPokemon() {
+    // OPTIMIZED: Fetch multiple Pokemon concurrently in batches
+    async fetchAllPokemonConcurrently() {
         const loadingDiv = document.getElementById('loadingDiv');
         const pokemonGrid = document.getElementById('pokemonGrid');
+        const progressText = document.getElementById('loadingProgress');
+        const progressFill = document.getElementById('progressFill');
+        
+        const BATCH_SIZE = 10; // Fetch 10 Pokemon at once for optimal performance
+        const totalPokemon = 151;
         
         try {
-            for (let i = 1; i <= 151; i++) {
-                loadingDiv.textContent = `Loading Pokémon ${i}/151...`;
-                
-                const [pokemonResponse, speciesResponse] = await Promise.all([
-                    fetch(`https://pokeapi.co/api/v2/pokemon/${i}`),
-                    fetch(`https://pokeapi.co/api/v2/pokemon-species/${i}`)
-                ]);
-
-                if (!pokemonResponse.ok || !speciesResponse.ok) {
-                    throw new Error(`Failed to fetch Pokemon ${i}`);
+            // Create batches of Pokemon IDs
+            const batches = [];
+            for (let i = 1; i <= totalPokemon; i += BATCH_SIZE) {
+                const batch = [];
+                for (let j = i; j < i + BATCH_SIZE && j <= totalPokemon; j++) {
+                    batch.push(j);
                 }
-
-                const pokemonData = await pokemonResponse.json();
-                const speciesData = await speciesResponse.json();
-
-                const pokemon = {
-                    id: pokemonData.id,
-                    name: pokemonData.name,
-                    types: pokemonData.types.map(type => type.type.name),
-                    height: pokemonData.height / 10,
-                    weight: pokemonData.weight / 10,
-                    abilities: pokemonData.abilities.map(ability => 
-                        ability.ability.name.replace('-', ' ')
-                    ),
-                    stats: pokemonData.stats.reduce((acc, stat) => {
-                        acc[stat.stat.name] = stat.base_stat;
-                        return acc;
-                    }, {}),
-                    sprite: pokemonData.sprites.front_default,
-                    description: this.getEnglishDescription(speciesData.flavor_text_entries)
-                };
-
-                this.pokemonList.push(pokemon);
-                
-                // Collect unique types
-                pokemon.types.forEach(type => {
-                    if (!this.types.includes(type)) {
-                        this.types.push(type);
-                    }
-                });
+                batches.push(batch);
             }
 
+            // Process each batch concurrently
+            for (const batch of batches) {
+                const batchPromises = batch.map(id => this.fetchSinglePokemon(id));
+                const batchResults = await Promise.allSettled(batchPromises);
+                
+                // Process successful results
+                batchResults.forEach((result, index) => {
+                    if (result.status === 'fulfilled' && result.value) {
+                        this.pokemonList.push(result.value);
+                        this.collectTypes(result.value.types);
+                    } else {
+                        console.warn(`Failed to fetch Pokemon #${batch[index]}`);
+                    }
+                    
+                    this.loadedCount++;
+                    this.updateProgress(progressText, progressFill, totalPokemon);
+                });
+
+                // Small delay between batches to prevent API rate limiting
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+
+            // Sort Pokemon by ID to maintain proper order
+            this.pokemonList.sort((a, b) => a.id - b.id);
             this.filteredPokemon = [...this.pokemonList];
+            
             loadingDiv.style.display = 'none';
             pokemonGrid.style.display = 'grid';
 
         } catch (error) {
             console.error('Error fetching Pokemon data:', error);
-            loadingDiv.textContent = 'Error loading Pokédex. Please refresh the page.';
+            loadingDiv.innerHTML = '<p>Error loading Pokédex. Please refresh the page.</p>';
         }
+    }
+
+    // OPTIMIZED: Single function to fetch both Pokemon and species data
+    async fetchSinglePokemon(id) {
+        try {
+            const [pokemonResponse, speciesResponse] = await Promise.all([
+                fetch(`https://pokeapi.co/api/v2/pokemon/${id}`),
+                fetch(`https://pokeapi.co/api/v2/pokemon-species/${id}`)
+            ]);
+
+            if (!pokemonResponse.ok || !speciesResponse.ok) {
+                throw new Error(`Failed to fetch Pokemon ${id}`);
+            }
+
+            const [pokemonData, speciesData] = await Promise.all([
+                pokemonResponse.json(),
+                speciesResponse.json()
+            ]);
+
+            return this.processPokemonData(pokemonData, speciesData);
+
+        } catch (error) {
+            console.error(`Error fetching Pokemon ${id}:`, error);
+            return null;
+        }
+    }
+
+    // OPTIMIZED: Process Pokemon data with base stat total calculation
+    processPokemonData(pokemonData, speciesData) {
+        const stats = pokemonData.stats.reduce((acc, stat) => {
+            acc[stat.stat.name] = stat.base_stat;
+            return acc;
+        }, {});
+
+        // Calculate base stat total
+        const baseStatTotal = Object.values(stats).reduce((sum, stat) => sum + stat, 0);
+
+        return {
+            id: pokemonData.id,
+            name: pokemonData.name,
+            types: pokemonData.types.map(type => type.type.name),
+            height: pokemonData.height / 10,
+            weight: pokemonData.weight / 10,
+            abilities: pokemonData.abilities.map(ability => 
+                ability.ability.name.replace('-', ' ')
+            ),
+            stats: stats,
+            baseStatTotal: baseStatTotal, // NEW: Base stat total
+            sprite: pokemonData.sprites.front_default,
+            description: this.getEnglishDescription(speciesData.flavor_text_entries)
+        };
+    }
+
+    updateProgress(progressText, progressFill, total) {
+        const percentage = (this.loadedCount / total) * 100;
+        progressText.textContent = `${this.loadedCount}/${total}`;
+        progressFill.style.width = `${percentage}%`;
+    }
+
+    collectTypes(types) {
+        types.forEach(type => {
+            if (!this.types.includes(type)) {
+                this.types.push(type);
+            }
+        });
     }
 
     getEnglishDescription(flavorTextEntries) {
@@ -85,7 +150,13 @@ class Pokedex {
         const modalOverlay = document.getElementById('modalOverlay');
         const closeModal = document.getElementById('closeModal');
 
-        searchInput.addEventListener('input', () => this.filterPokemon());
+        // OPTIMIZED: Debounced search for better performance
+        let searchTimeout;
+        searchInput.addEventListener('input', () => {
+            clearTimeout(searchTimeout);
+            searchTimeout = setTimeout(() => this.filterPokemon(), 300);
+        });
+        
         typeFilter.addEventListener('change', () => this.filterPokemon());
         
         modalOverlay.addEventListener('click', (e) => {
@@ -96,7 +167,6 @@ class Pokedex {
         
         closeModal.addEventListener('click', () => this.closeModal());
 
-        // Close modal with Escape key
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
                 this.closeModal();
@@ -120,7 +190,8 @@ class Pokedex {
 
         this.filteredPokemon = this.pokemonList.filter(pokemon => {
             const matchesSearch = pokemon.name.toLowerCase().includes(searchTerm) ||
-                                pokemon.id.toString().includes(searchTerm);
+                                pokemon.id.toString().includes(searchTerm) ||
+                                pokemon.baseStatTotal.toString().includes(searchTerm);
             const matchesType = typeFilter === 'all' || pokemon.types.includes(typeFilter);
             return matchesSearch && matchesType;
         });
@@ -147,6 +218,7 @@ class Pokedex {
             <img src="${pokemon.sprite}" alt="${pokemon.name}" loading="lazy">
             <h3>#${pokemon.id.toString().padStart(3, '0')}</h3>
             <h2>${pokemon.name.charAt(0).toUpperCase() + pokemon.name.slice(1)}</h2>
+            <div class="base-stat-total">BST: ${pokemon.baseStatTotal}</div>
             <div class="types">
                 ${pokemon.types.map(type => 
                     `<span class="type ${type}">${type}</span>`
@@ -187,7 +259,7 @@ class Pokedex {
                 </div>
                 
                 <div class="base-stats">
-                    <h3>Base Stats</h3>
+                    <h3>Base Stats <span class="total-stat">Total: ${pokemon.baseStatTotal}</span></h3>
                     ${Object.entries(pokemon.stats).map(([stat, value]) => `
                         <div class="stat">
                             <span>${stat.replace('-', ' ').toUpperCase()}</span>
@@ -209,7 +281,7 @@ class Pokedex {
         setTimeout(() => {
             const statFills = modalContent.querySelectorAll('.stat-fill');
             statFills.forEach(fill => {
-                fill.style.width = fill.style.width; // Trigger reflow for animation
+                fill.style.width = fill.style.width;
             });
         }, 100);
     }
@@ -220,7 +292,7 @@ class Pokedex {
     }
 }
 
-// Initialize the Pokédex when the page loads
+// Initialize the Fast Pokédex when the page loads
 document.addEventListener('DOMContentLoaded', () => {
-    new Pokedex();
+    new FastPokedex();
 });
